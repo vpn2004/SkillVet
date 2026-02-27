@@ -54,12 +54,16 @@ Use this skill to submit OpenClaw skill ratings into SafeSpace.
   --dry-run
 
 # Submit audited score summaries to server (dedupe by local report hash)
+# Reports will include server score feedback: before / after / delta
 ./bin/safespace-rater audit-local \
   --skills-dir ~/.agents/skills \
   --auto \
   --sample-rate 5 \
   --max-report-runes 500 \
   --max-submit 5
+
+# Retry failed uploads from local pending queue
+./bin/safespace-rater retry-pending --max-submit 20
 ```
 
 5. Query public single-score result:
@@ -77,3 +81,6 @@ Use this skill to submit OpenClaw skill ratings into SafeSpace.
 - Interactive mode input: `0..100` submit / `s` skip / `q` quit
 - `audit-local` report/comment are capped at 500 chars and saved under `~/.safespace/audit-reports`
 - `audit-local` uses local hash cache (`~/.safespace/audit-cache.json`) to avoid duplicate uploads
+- On successful upload, local report appends server score feedback (`before/after/delta`)
+- Failed uploads are queued in `~/.safespace/pending-uploads.json`; use `retry-pending` for compensation retries
+- Audit scoring is heuristic for fast triage, not a formal security certification

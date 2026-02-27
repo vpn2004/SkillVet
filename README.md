@@ -8,9 +8,11 @@
 ## 目录
 
 - `cmd/safespace-rater/` CLI 入口
-- `internal/rater/` 客户端能力（注册、评分、发现、audit-local）
+- `internal/rater/` 客户端能力（注册、评分、发现、audit-local、retry 队列）
 - `internal/did/` 本地签名工具（Ed25519）
 - `skills/safespace-rater/SKILL.md` Skill 定义
+- `tests/e2e/` 端到端集成测试
+- `TESTLIST.md` 回归测试清单（更新功能时必须同步）
 
 ## 快速开始
 
@@ -25,6 +27,7 @@ make build
 ./bin/safespace-rater discover --skills-dir ~/.agents/skills --auto
 
 # 4) 生成 500 字内审查摘要并上传（默认 5% 抽检标记）
+# 上传成功后会在本地报告写入服务端分数回读: before/after/delta
 ./bin/safespace-rater audit-local \
   --skills-dir ~/.agents/skills \
   --auto \
@@ -32,6 +35,9 @@ make build
   --max-report-runes 500 \
   --max-submit 5 \
   --server https://skillvet.cc.cd
+
+# 5) 上传失败可重试（离线补偿队列）
+./bin/safespace-rater retry-pending --max-submit 20 --server https://skillvet.cc.cd
 ```
 
 ## 常用命令
@@ -43,6 +49,17 @@ make build
 ./bin/safespace-rater summary --skill-id openclaw/weather@1.0.0
 ./bin/safespace-rater top --limit 20 --min-count 1
 ./bin/safespace-rater audit-local --skills-dir ~/.agents/skills --auto --dry-run
+./bin/safespace-rater retry-pending --max-submit 20
+```
+
+## 测试（发布前必跑）
+
+```bash
+# 全量
+make test
+
+# 端到端集成测试（register -> audit-local -> retry-pending -> summary）
+go test ./tests/e2e -run TestAuditFlowEndToEnd -v
 ```
 
 ## 安全说明

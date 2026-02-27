@@ -12,18 +12,27 @@ import (
 	"time"
 )
 
+type AuditEvidence struct {
+	RuleID      string `json:"rule_id"`
+	Severity    string `json:"severity"`
+	Path        string `json:"path"`
+	SnippetHash string `json:"snippet_hash"`
+	Excerpt     string `json:"excerpt,omitempty"`
+}
+
 type SkillAudit struct {
-	SkillID       string   `json:"skill_id"`
-	Score         float64  `json:"score"`
-	Strengths     []string `json:"strengths"`
-	Risks         []string `json:"risks"`
-	RiskHigh      int      `json:"risk_high"`
-	RiskMedium    int      `json:"risk_medium"`
-	RiskLow       int      `json:"risk_low"`
-	ReviewedFiles []string `json:"reviewed_files"`
-	ReportHash    string   `json:"report_hash"`
-	Report        string   `json:"report"`
-	Sampled       bool     `json:"sampled"`
+	SkillID       string          `json:"skill_id"`
+	Score         float64         `json:"score"`
+	Strengths     []string        `json:"strengths"`
+	Risks         []string        `json:"risks"`
+	RiskHigh      int             `json:"risk_high"`
+	RiskMedium    int             `json:"risk_medium"`
+	RiskLow       int             `json:"risk_low"`
+	ReviewedFiles []string        `json:"reviewed_files"`
+	Evidence      []AuditEvidence `json:"evidence"`
+	ReportHash    string          `json:"report_hash"`
+	Report        string          `json:"report"`
+	Sampled       bool            `json:"sampled"`
 }
 
 type AuditCacheEntry struct {
@@ -46,6 +55,7 @@ func BuildSkillAudit(skillID, skillDir string, sampleRate int, maxRunes int) (Sk
 	files := collectAuditFiles(skillDir)
 	strengths := make([]string, 0)
 	risks := make([]string, 0)
+	evidences := make([]AuditEvidence, 0)
 	high, medium, low := 0, 0, 0
 	score := 95.0
 
@@ -55,22 +65,47 @@ func BuildSkillAudit(skillID, skillDir string, sampleRate int, maxRunes int) (Sk
 		if err != nil {
 			continue
 		}
-		content := strings.ToLower(string(buf))
-		if containsAny(content, "os.system(", "subprocess.", "exec(", "eval(", "shell=true", "bash -c") {
-			high++
-			score -= 20
+		origin := string(buf)
+		content := strings.ToLower(origin)
+
+		hasDangerExec := containsAny(content, "os.system(", "subprocess.", "exec(", "eval(", "shell=true", "bash -c")
+		hasUntrustedInput := containsAny(content, "input(", "sys.argv", "argparse", "request.args", "request.form", "ctx.query", "params[", "stdin", "click.option")
+		hasFileIO := containsAny(content, "open(", "read_text(", "write_text(", "filepath.join", "path.join")
+
+		if hasDangerExec {
 			foundDangerExec = true
-			risks = append(risks, fmt.Sprintf("发现命令执行风险（%s）", f))
+			if hasUntrustedInput {
+				high++
+				score -= 20
+				risks = append(risks, fmt.Sprintf("发现可控输入触发的命令执行风险（%s）", f))
+				evidences = append(evidences, buildEvidence("R_EXEC_UNTRUSTED", "high", f, origin, "subprocess"))
+			} else {
+				medium++
+				score -= 8
+				risks = append(risks, fmt.Sprintf("发现命令执行调用，暂未识别可控输入（%s）", f))
+				evidences = append(evidences, buildEvidence("R_EXEC_STATIC", "medium", f, origin, "subprocess"))
+			}
 		}
+
 		if strings.Contains(content, "http://") {
 			medium++
 			score -= 10
 			risks = append(risks, fmt.Sprintf("发现明文HTTP调用（%s）", f))
+			evidences = append(evidences, buildEvidence("R_HTTP_PLAINTEXT", "medium", f, origin, "http://"))
 		}
-		if containsAny(content, "open(", "read_text(", "write_text(") && containsAny(content, "argparse", "sys.argv", "click.option") {
-			low++
-			score -= 5
-			risks = append(risks, fmt.Sprintf("发现路径参数读写，需限制目录（%s）", f))
+
+		if hasFileIO {
+			if hasUntrustedInput {
+				medium++
+				score -= 10
+				risks = append(risks, fmt.Sprintf("发现可控输入参与文件路径读写（%s）", f))
+				evidences = append(evidences, buildEvidence("R_PATH_UNTRUSTED", "medium", f, origin, "open("))
+			} else {
+				low++
+				score -= 3
+				risks = append(risks, fmt.Sprintf("发现文件读写操作，建议限制路径边界（%s）", f))
+				evidences = append(evidences, buildEvidence("R_PATH_IO", "low", f, origin, "open("))
+			}
 		}
 	}
 
@@ -91,6 +126,13 @@ func BuildSkillAudit(skillID, skillDir string, sampleRate int, maxRunes int) (Sk
 		files = []string{"SKILL.md"}
 	}
 
+	sort.Slice(evidences, func(i, j int) bool {
+		if evidences[i].Path == evidences[j].Path {
+			return evidences[i].RuleID < evidences[j].RuleID
+		}
+		return evidences[i].Path < evidences[j].Path
+	})
+
 	audit := SkillAudit{
 		SkillID:       skillID,
 		Score:         score,
@@ -100,6 +142,7 @@ func BuildSkillAudit(skillID, skillDir string, sampleRate int, maxRunes int) (Sk
 		RiskMedium:    medium,
 		RiskLow:       low,
 		ReviewedFiles: files,
+		Evidence:      evidences,
 	}
 
 	audit.ReportHash = buildAuditHash(audit)
@@ -123,8 +166,8 @@ func ComposeAuditComment(a SkillAudit, maxRunes int) string {
 
 	reportOneLine := strings.ReplaceAll(a.Report, "\n", " ")
 	reportOneLine = strings.Join(strings.Fields(reportOneLine), " ")
-	comment := fmt.Sprintf("audit:v1 hash=%s sample=%d score=%.1f risk(h/m/l)=%d/%d/%d files=%d summary=%s",
-		hash, sample, a.Score, a.RiskHigh, a.RiskMedium, a.RiskLow, len(a.ReviewedFiles), reportOneLine)
+	comment := fmt.Sprintf("audit:v1 hash=%s sample=%d score=%.1f risk(h/m/l)=%d/%d/%d files=%d evidence=%d summary=%s",
+		hash, sample, a.Score, a.RiskHigh, a.RiskMedium, a.RiskLow, len(a.ReviewedFiles), len(a.Evidence), reportOneLine)
 	return truncateRunes(comment, maxRunes)
 }
 
@@ -219,6 +262,41 @@ func containsAny(text string, tokens ...string) bool {
 	return false
 }
 
+func buildEvidence(ruleID, severity, path, content, token string) AuditEvidence {
+	excerpt := snippetAround(content, strings.ToLower(token), 80)
+	if excerpt == "" {
+		excerpt = truncateRunes(strings.TrimSpace(content), 120)
+	}
+	h := sha256.Sum256([]byte(excerpt))
+	return AuditEvidence{
+		RuleID:      ruleID,
+		Severity:    severity,
+		Path:        path,
+		SnippetHash: hex.EncodeToString(h[:]),
+		Excerpt:     truncateRunes(strings.Join(strings.Fields(excerpt), " "), 120),
+	}
+}
+
+func snippetAround(content, token string, radius int) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lower := strings.ToLower(content)
+	idx := strings.Index(lower, strings.ToLower(token))
+	if idx < 0 {
+		return ""
+	}
+	start := idx - radius
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(token) + radius
+	if end > len(content) {
+		end = len(content)
+	}
+	return content[start:end]
+}
+
 func buildAuditNarrative(a SkillAudit) string {
 	skillName := a.SkillID
 	if idx := strings.Index(skillName, "/"); idx >= 0 && idx+1 < len(skillName) {
@@ -236,11 +314,15 @@ func buildAuditNarrative(a SkillAudit) string {
 	if len(a.Risks) > 0 {
 		risk = strings.Join(a.Risks, "；")
 	}
-	return fmt.Sprintf("1) %s 安全审查结果 我审了 %s，结论：优点 - %s。风险点（中等，可控） - %s。建议优先修复高风险点并限制输入边界。最终分：%.1f。", skillName, files, strength, risk, a.Score)
+	return fmt.Sprintf("1) %s 安全审查结果 我审了 %s，结论：优点 - %s。风险点（中等，可控） - %s。证据链：%d 条。建议优先修复高风险点并限制输入边界。最终分：%.1f。", skillName, files, strength, risk, len(a.Evidence), a.Score)
 }
 
 func buildAuditHash(a SkillAudit) string {
-	parts := []string{a.SkillID, fmt.Sprintf("%.2f", a.Score), strings.Join(a.Strengths, "|"), strings.Join(a.Risks, "|"), strings.Join(a.ReviewedFiles, "|")}
+	evidenceParts := make([]string, 0, len(a.Evidence))
+	for _, e := range a.Evidence {
+		evidenceParts = append(evidenceParts, e.RuleID+"|"+e.Severity+"|"+e.Path+"|"+e.SnippetHash)
+	}
+	parts := []string{a.SkillID, fmt.Sprintf("%.2f", a.Score), strings.Join(a.Strengths, "|"), strings.Join(a.Risks, "|"), strings.Join(a.ReviewedFiles, "|"), strings.Join(evidenceParts, "|")}
 	s := strings.Join(parts, "\n")
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])

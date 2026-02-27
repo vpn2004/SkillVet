@@ -156,6 +156,21 @@ func (c *Client) GetSkillScore(skillID string) (SkillScore, error) {
 	return out, nil
 }
 
+func (c *Client) GetSkillScoreOrZero(skillID string) (float64, error) {
+	score, err := c.GetSkillScore(skillID)
+	if err != nil {
+		if strings.Contains(err.Error(), "status=404") {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return score.Score, nil
+}
+
+func BuildScoreDelta(before, after float64) float64 {
+	return after - before
+}
+
 func (c *Client) GetTopSkills(limit, minCount int) ([]SkillScore, error) {
 	if limit <= 0 {
 		limit = 20

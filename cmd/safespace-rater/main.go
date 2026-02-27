@@ -32,6 +32,8 @@ func main() {
 		runTop(os.Args[2:])
 	case "audit-local":
 		runAuditLocal(os.Args[2:])
+	case "retry-pending":
+		runRetryPending(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(2)
@@ -268,6 +270,7 @@ func runAuditLocal(args []string) {
 	dryRun := fs.Bool("dry-run", false, "generate report only without upload")
 	cachePath := fs.String("cache", defaultAuditCachePath(), "audit dedupe cache path")
 	reportDir := fs.String("report-dir", defaultAuditReportDir(), "output directory for audit reports")
+	pendingPath := fs.String("pending-path", defaultPendingQueuePath(), "pending upload queue path")
 	_ = fs.Parse(args)
 
 	if *sampleRate < 0 || *sampleRate > 100 {
@@ -307,6 +310,14 @@ func runAuditLocal(args []string) {
 	}
 	client := rater.NewClient(*server)
 
+	pendingQueue := rater.PendingUploadQueue{}
+	if !*dryRun {
+		pendingQueue, err = rater.LoadPendingUploadQueue(*pendingPath)
+		if err != nil {
+			die(err.Error())
+		}
+	}
+
 	if err := os.MkdirAll(*reportDir, 0o700); err != nil {
 		die(err.Error())
 	}
@@ -322,9 +333,11 @@ func runAuditLocal(args []string) {
 		}
 
 		reportPath := filepath.Join(*reportDir, sanitizeFilename(s.SkillID)+".md")
-		_ = os.WriteFile(reportPath, []byte(audit.Report+"\n"), 0o600)
+		reportLines := []string{audit.Report}
 
 		if !cache.ShouldUpload(s.SkillID, audit.ReportHash) {
+			reportLines = append(reportLines, "", "上传状态：已跳过（重复内容）")
+			_ = os.WriteFile(reportPath, []byte(strings.Join(reportLines, "\n")+"\n"), 0o600)
 			fmt.Printf("dedupe skill=%s hash=%s\n", s.SkillID, audit.ReportHash[:12])
 			skipped++
 			continue
@@ -332,6 +345,8 @@ func runAuditLocal(args []string) {
 
 		comment := rater.ComposeAuditComment(audit, *maxReportRunes)
 		if *dryRun {
+			reportLines = append(reportLines, "", "上传状态：dry-run（未上传）")
+			_ = os.WriteFile(reportPath, []byte(strings.Join(reportLines, "\n")+"\n"), 0o600)
 			fmt.Printf("dry-run skill=%s score=%.1f sampled=%v report=%s\n", s.SkillID, audit.Score, audit.Sampled, reportPath)
 			cache.MarkUploaded(s.SkillID, audit.ReportHash)
 			uploaded++
@@ -341,14 +356,38 @@ func runAuditLocal(args []string) {
 			continue
 		}
 
+		beforeScore, beforeErr := client.GetSkillScoreOrZero(s.SkillID)
+		if beforeErr != nil {
+			fmt.Printf("warn skill=%s cannot load pre-score: %v\n", s.SkillID, beforeErr)
+			beforeScore = 0
+		}
+
 		if err := client.SubmitSkillRating(identity, s.SkillID, audit.Score, comment); err != nil {
-			fmt.Printf("skip skill=%s err=%v\n", s.SkillID, err)
+			pendingQueue.Enqueue(rater.PendingUpload{
+				SkillID:    s.SkillID,
+				Score:      audit.Score,
+				Comment:    comment,
+				ReportHash: audit.ReportHash,
+			}, 1000)
+			reportLines = append(reportLines, "", fmt.Sprintf("上传状态：失败（%v）", err), "补偿机制：已加入待重试队列")
+			_ = os.WriteFile(reportPath, []byte(strings.Join(reportLines, "\n")+"\n"), 0o600)
+			fmt.Printf("skip skill=%s err=%v queued_for_retry=true\n", s.SkillID, err)
 			skipped++
 			continue
 		}
+
+		afterScore, afterErr := client.GetSkillScoreOrZero(s.SkillID)
+		if afterErr != nil {
+			fmt.Printf("warn skill=%s cannot load post-score: %v\n", s.SkillID, afterErr)
+			afterScore = beforeScore
+		}
+		delta := rater.BuildScoreDelta(beforeScore, afterScore)
+		reportLines = append(reportLines, "", fmt.Sprintf("服务端评分回读：before=%.2f after=%.2f delta=%+.2f", beforeScore, afterScore, delta), "上传状态：成功")
+		_ = os.WriteFile(reportPath, []byte(strings.Join(reportLines, "\n")+"\n"), 0o600)
+
 		cache.MarkUploaded(s.SkillID, audit.ReportHash)
 		uploaded++
-		fmt.Printf("audited skill=%s score=%.1f sampled=%v report=%s\n", s.SkillID, audit.Score, audit.Sampled, reportPath)
+		fmt.Printf("audited skill=%s score=%.1f sampled=%v server_delta=%+.2f report=%s\n", s.SkillID, audit.Score, audit.Sampled, delta, reportPath)
 		if uploaded >= *maxSubmit {
 			break
 		}
@@ -357,7 +396,78 @@ func runAuditLocal(args []string) {
 	if err := rater.SaveAuditCache(*cachePath, cache); err != nil {
 		die(err.Error())
 	}
-	fmt.Printf("audit uploaded=%d skipped=%d discovered=%d\n", uploaded, skipped, len(skills))
+	if !*dryRun {
+		if err := rater.SavePendingUploadQueue(*pendingPath, pendingQueue); err != nil {
+			die(err.Error())
+		}
+	}
+	fmt.Printf("audit uploaded=%d skipped=%d discovered=%d pending=%d\n", uploaded, skipped, len(skills), len(pendingQueue.Items))
+}
+
+func runRetryPending(args []string) {
+	fs := flag.NewFlagSet("retry-pending", flag.ExitOnError)
+	server := fs.String("server", defaultServerURL(), "SafeSpace API base URL")
+	identityPath := fs.String("identity", defaultIdentityPath(), "path to identity json")
+	pendingPath := fs.String("pending-path", defaultPendingQueuePath(), "pending upload queue path")
+	maxSubmit := fs.Int("max-submit", 20, "max pending uploads to retry per run")
+	_ = fs.Parse(args)
+
+	if *maxSubmit <= 0 {
+		die("--max-submit must be > 0")
+	}
+
+	identity, err := rater.LoadIdentity(*identityPath)
+	if err != nil {
+		die(err.Error())
+	}
+
+	queue, err := rater.LoadPendingUploadQueue(*pendingPath)
+	if err != nil {
+		die(err.Error())
+	}
+	if len(queue.Items) == 0 {
+		fmt.Println("retry submitted=0 failed=0 remaining=0")
+		return
+	}
+
+	client := rater.NewClient(*server)
+	submitted, failed, remaining := retryPendingUploads(queue, *maxSubmit, func(item rater.PendingUpload) error {
+		err := client.SubmitSkillRating(identity, item.SkillID, item.Score, item.Comment)
+		if err != nil {
+			fmt.Printf("retry failed skill=%s err=%v\n", item.SkillID, err)
+			return err
+		}
+		fmt.Printf("retry ok skill=%s score=%.1f\n", item.SkillID, item.Score)
+		return nil
+	})
+
+	if err := rater.SavePendingUploadQueue(*pendingPath, remaining); err != nil {
+		die(err.Error())
+	}
+	fmt.Printf("retry submitted=%d failed=%d remaining=%d\n", submitted, failed, len(remaining.Items))
+}
+
+func retryPendingUploads(queue rater.PendingUploadQueue, maxSubmit int, submitFn func(item rater.PendingUpload) error) (submitted int, failed int, remaining rater.PendingUploadQueue) {
+	remaining = rater.PendingUploadQueue{Items: make([]rater.PendingUpload, 0, len(queue.Items))}
+	if maxSubmit <= 0 {
+		maxSubmit = len(queue.Items)
+	}
+
+	processed := 0
+	for _, item := range queue.Items {
+		if processed >= maxSubmit {
+			remaining.Items = append(remaining.Items, item)
+			continue
+		}
+		processed++
+		if err := submitFn(item); err != nil {
+			failed++
+			remaining.Items = append(remaining.Items, item)
+			continue
+		}
+		submitted++
+	}
+	return submitted, failed, remaining
 }
 
 func defaultServerURL() string {
@@ -391,6 +501,14 @@ func defaultAuditReportDir() string {
 	return filepath.Join(home, ".safespace", "audit-reports")
 }
 
+func defaultPendingQueuePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "data/pending-uploads.json"
+	}
+	return filepath.Join(home, ".safespace", "pending-uploads.json")
+}
+
 func sanitizeFilename(v string) string {
 	replacer := strings.NewReplacer("/", "_", "@", "_", " ", "_", "..", "_", "\\", "_")
 	s := replacer.Replace(strings.TrimSpace(v))
@@ -421,5 +539,6 @@ func printUsage() {
 	fmt.Println("  rate-local [--interactive] [--score <0..100>] [--skills-dir] [--auto] [--source] [--version] [--max-submit] [--comment] [--identity] [--server]")
 	fmt.Println("  summary    --skill-id <source/name@version> [--server]")
 	fmt.Println("  top        [--limit] [--min-count] [--server]")
-	fmt.Println("  audit-local [--skills-dir] [--sample-rate 5] [--max-report-runes 500] [--max-submit] [--dry-run] [--cache] [--report-dir] [--identity] [--server]")
+	fmt.Println("  audit-local [--skills-dir] [--sample-rate 5] [--max-report-runes 500] [--max-submit] [--dry-run] [--cache] [--report-dir] [--pending-path] [--identity] [--server]")
+	fmt.Println("  retry-pending [--pending-path] [--max-submit] [--identity] [--server]")
 }
