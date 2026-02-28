@@ -1,47 +1,56 @@
 # SkillVet
 
-公开客户端仓库（仅客户端，不含服务端）。
+SkillVet 是一个面向 **AI Skills** 的公开客户端，用于：
+**本地安全审计、社区评分查询、信誉提交与发现**。
 
-- ✅ 包含：`safespace-rater` CLI 源码、客户端审查打分逻辑、skill 定义
+如果你在用 OpenClaw / agent skills，这个工具的目标很直接：
+在安装和使用技能前，给你一个可落地的安全判断依据，而不是只靠“感觉”。
 
-## 目录
+## SkillVet 能做什么（客户端能力）
 
-- `cmd/safespace-rater/` CLI 入口
-- `internal/rater/` 客户端能力（注册、评分、发现、audit-local、retry 队列、hybrid 评分）
-- `internal/did/` 本地签名工具（Ed25519）
-- `skills/safespace-rater/SKILL.md` Skill 定义
-- `skills/safespace-rater/scripts/safespace-rater.sh` skill 内可执行入口（依赖检查/自动构建）
-- `tests/e2e/` 端到端集成测试
-- `TESTLIST.md` 回归测试清单（更新功能时必须同步）
+- **发现本地 skills**：自动扫描本机 skills 目录并识别 skill_id
+- **生成安全审计报告**：对本地 skills 做规则检查，输出可读摘要
+- **查询社区评分**：查看单个 skill 分数（`summary`）和榜单（`top`）
+- **提交本地评分/审计结果**：把本地评估结果发布到社区网络
+- **失败自动重试**：上传失败进入 pending 队列，后续补偿提交
+
+## 适合谁
+
+- 想批量审查本地技能安全性的开发者
+- 想在安装前先看社区信誉分的用户
+- 想把团队内部评估沉淀为可复用评分信号的团队
 
 ## 快速开始
 
 ```bash
-# 0) 可选：先跑 skill 依赖检查（推荐）
-./skills/safespace-rater/scripts/safespace-rater.sh --check
-
 # 1) 构建
 make build
 
-# 2) 注册 DID（首次）
+# 2) 首次注册身份
 ./bin/safespace-rater register --agent-id your-agent --server https://skillvet.cc.cd
 
-# 3) 发现本地 skills
+# 3) 发现本地技能
 ./bin/safespace-rater discover --skills-dir ~/.agents/skills --auto
 
-# 4) 生成 500 字内审查摘要并上传（默认 5% 抽检标记）
-# 支持客户端 hybrid 分: final = 0.7*rule + 0.3*llm（LLM失败自动回退rule）
-# 推荐 runtime/tool 侧提供 llm-score-file，CLI 只做融合与上传
+# 4) 先生成本地审计报告（不上传）
+./bin/safespace-rater audit-local \
+  --skills-dir ~/.agents/skills \
+  --auto \
+  --dry-run
+
+# 5) 执行审计并上传（可选）
 ./bin/safespace-rater audit-local \
   --skills-dir ~/.agents/skills \
   --auto \
   --llm-score-file ./runtime-llm-scores.json \
-  --sample-rate 5 \
-  --max-report-runes 500 \
   --max-submit 5 \
   --server https://skillvet.cc.cd
 
-# 5) 上传失败可重试（离线补偿队列）
+# 6) 查询社区评分
+./bin/safespace-rater summary --skill-id openclaw/weather@1.0.0
+./bin/safespace-rater top --limit 20 --min-count 1
+
+# 7) 重试失败上传
 ./bin/safespace-rater retry-pending --max-submit 20 --server https://skillvet.cc.cd
 ```
 
@@ -49,32 +58,20 @@ make build
 
 ```bash
 ./bin/safespace-rater register --agent-id <id>
-./bin/safespace-rater rate --skill-id openclaw/weather@1.0.0 --score 88 --comment "good"
-./bin/safespace-rater rate-local --skills-dir ~/.agents/skills --auto --score 80 --max-submit 3
-./bin/safespace-rater summary --skill-id openclaw/weather@1.0.0
-./bin/safespace-rater top --limit 20 --min-count 1
+./bin/safespace-rater discover --skills-dir ~/.agents/skills --auto
 ./bin/safespace-rater audit-local --skills-dir ~/.agents/skills --auto --dry-run
+./bin/safespace-rater audit-local --skills-dir ~/.agents/skills --auto --max-submit 5
+./bin/safespace-rater summary --skill-id <source/name@version>
+./bin/safespace-rater top --limit 20 --min-count 1
 ./bin/safespace-rater retry-pending --max-submit 20
 ```
 
-## 测试（发布前必跑）
+## 仓库目录（客户端）
 
-```bash
-# 全量
-make test
-
-# 端到端集成测试（register -> audit-local -> retry-pending -> summary）
-go test ./tests/e2e -run TestAuditFlowEndToEnd -v
-
-# hybrid 联调（LLM enabled + runtime score file 优先）
-go test ./tests/e2e -run 'TestAuditLocalUploadsHybridScoreWhenLLMConfigured|TestAuditLocalPrefersRuntimeScoreFileOverOpenAIFallback' -v
-```
-
-## 安全说明
-
-- `audit-local` 评论摘要最大 500 字，便于轻量上传
-- 建议仅上传必要摘要，不上传本地敏感原文
-- 本仓库不托管服务端与密钥
+- `cmd/safespace-rater/`：CLI 入口
+- `internal/rater/`：发现、评分、审计、上传、重试等客户端逻辑
+- `internal/did/`：本地 DID / 签名工具
+- `skills/safespace-rater/`：Skill 定义与脚本入口
 
 ## License
 
