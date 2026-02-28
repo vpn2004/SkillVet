@@ -41,6 +41,20 @@ func TestRetryPendingUploads(t *testing.T) {
 	}
 }
 
+func TestDefaultServerURLPrefersHTTPS(t *testing.T) {
+	t.Setenv("SAFESPACE_SERVER", "")
+	if got := defaultServerURL(); got != "https://skillvet.cc.cd" {
+		t.Fatalf("expected default https server, got %s", got)
+	}
+}
+
+func TestDefaultServerURLRespectsEnvOverride(t *testing.T) {
+	t.Setenv("SAFESPACE_SERVER", "http://127.0.0.1:8080")
+	if got := defaultServerURL(); got != "http://127.0.0.1:8080" {
+		t.Fatalf("expected env override server, got %s", got)
+	}
+}
+
 type assertErr struct{}
 
 func (assertErr) Error() string { return "fail" }

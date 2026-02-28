@@ -10,6 +10,12 @@
 - `go test ./internal/rater -run TestBuildScoreDelta -v`
 - `go test ./internal/rater -run TestBuildSkillAuditIncludesEvidence -v`
 - `go test ./internal/rater -run TestContextAwareCommandExecutionRule -v`
+- `go test ./internal/rater -run TestBuildHybridSkillAuditUsesBlendedScoreWhenLLMSucceeds -v`
+- `go test ./internal/rater -run TestBuildHybridSkillAuditFallsBackToRuleScoreOnLLMFailure -v`
+- `go test ./internal/rater -run TestComposeAuditCommentIncludesHybridMetadata -v`
+- `go test ./internal/rater -run TestNewRuntimePreferredLLMScorerUsesScoreFileFirst -v`
+- `go test ./internal/rater -run TestNewRuntimePreferredLLMScorerReturnsNilWhenNoRuntimeOrFallback -v`
+- `go test ./internal/rater -run TestNewRuntimePreferredLLMScorerAllowsOpenAIFallbackWhenEnabled -v`
 - `go test ./internal/rater -run TestPendingUploadQueueDedupAndPersistence -v`
 - `go test ./internal/rater -run TestPendingUploadQueueDrain -v`
 
@@ -22,6 +28,12 @@
 ### audit + 回读收益 + 重试补偿
 - `go test ./tests/e2e -run TestAuditFlowEndToEnd -v`
 - 覆盖路径：`register -> audit-local -> server score delta -> retry-pending -> summary`
+
+### hybrid 评分联调（客户端规则+LLM）
+- `go test ./tests/e2e -run TestAuditLocalUploadsHybridScoreWhenLLMConfigured -v`
+- `go test ./tests/e2e -run TestAuditLocalPrefersRuntimeScoreFileOverOpenAIFallback -v`
+- 覆盖路径：`register -> audit-local(LLM enabled) -> blended score upload -> comment metadata`
+- 覆盖路径：`register -> audit-local(runtime score file) -> fallback bypass -> blended score upload`
 
 ## 3) 全量回归（提交前必跑）
 

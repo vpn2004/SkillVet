@@ -268,6 +268,7 @@ func runAuditLocal(args []string) {
 	maxSubmit := fs.Int("max-submit", 5, "max submissions in one run")
 	maxReportRunes := fs.Int("max-report-runes", 500, "max report/comment runes")
 	dryRun := fs.Bool("dry-run", false, "generate report only without upload")
+	llmScoreFile := fs.String("llm-score-file", "", "runtime llm score json path (preferred over API fallback)")
 	cachePath := fs.String("cache", defaultAuditCachePath(), "audit dedupe cache path")
 	reportDir := fs.String("report-dir", defaultAuditReportDir(), "output directory for audit reports")
 	pendingPath := fs.String("pending-path", defaultPendingQueuePath(), "pending upload queue path")
@@ -322,10 +323,16 @@ func runAuditLocal(args []string) {
 		die(err.Error())
 	}
 
+	scorer, err := rater.NewRuntimePreferredLLMScorer(*llmScoreFile)
+	if err != nil {
+		die(err.Error())
+	}
+	weights := rater.HybridWeights{Rule: 0.7, LLM: 0.3}
+
 	uploaded := 0
 	skipped := 0
 	for _, s := range skills {
-		audit, err := rater.BuildSkillAudit(s.SkillID, s.Path, *sampleRate, *maxReportRunes)
+		audit, err := rater.BuildHybridSkillAudit(s.SkillID, s.Path, *sampleRate, *maxReportRunes, scorer, weights)
 		if err != nil {
 			fmt.Printf("skip skill=%s err=%v\n", s.SkillID, err)
 			skipped++
@@ -474,7 +481,7 @@ func defaultServerURL() string {
 	if v := strings.TrimSpace(os.Getenv("SAFESPACE_SERVER")); v != "" {
 		return v
 	}
-	return "http://skillvet.cc.cd"
+	return "https://skillvet.cc.cd"
 }
 
 func defaultIdentityPath() string {
@@ -539,6 +546,6 @@ func printUsage() {
 	fmt.Println("  rate-local [--interactive] [--score <0..100>] [--skills-dir] [--auto] [--source] [--version] [--max-submit] [--comment] [--identity] [--server]")
 	fmt.Println("  summary    --skill-id <source/name@version> [--server]")
 	fmt.Println("  top        [--limit] [--min-count] [--server]")
-	fmt.Println("  audit-local [--skills-dir] [--sample-rate 5] [--max-report-runes 500] [--max-submit] [--dry-run] [--cache] [--report-dir] [--pending-path] [--identity] [--server]")
+	fmt.Println("  audit-local [--skills-dir] [--sample-rate 5] [--max-report-runes 500] [--max-submit] [--dry-run] [--llm-score-file] [--cache] [--report-dir] [--pending-path] [--identity] [--server]")
 	fmt.Println("  retry-pending [--pending-path] [--max-submit] [--identity] [--server]")
 }

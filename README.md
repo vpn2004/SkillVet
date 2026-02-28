@@ -7,15 +7,19 @@
 ## 目录
 
 - `cmd/safespace-rater/` CLI 入口
-- `internal/rater/` 客户端能力（注册、评分、发现、audit-local、retry 队列）
+- `internal/rater/` 客户端能力（注册、评分、发现、audit-local、retry 队列、hybrid 评分）
 - `internal/did/` 本地签名工具（Ed25519）
 - `skills/safespace-rater/SKILL.md` Skill 定义
+- `skills/safespace-rater/scripts/safespace-rater.sh` skill 内可执行入口（依赖检查/自动构建）
 - `tests/e2e/` 端到端集成测试
 - `TESTLIST.md` 回归测试清单（更新功能时必须同步）
 
 ## 快速开始
 
 ```bash
+# 0) 可选：先跑 skill 依赖检查（推荐）
+./skills/safespace-rater/scripts/safespace-rater.sh --check
+
 # 1) 构建
 make build
 
@@ -26,10 +30,12 @@ make build
 ./bin/safespace-rater discover --skills-dir ~/.agents/skills --auto
 
 # 4) 生成 500 字内审查摘要并上传（默认 5% 抽检标记）
-# 上传成功后会在本地报告写入服务端分数回读: before/after/delta
+# 支持客户端 hybrid 分: final = 0.7*rule + 0.3*llm（LLM失败自动回退rule）
+# 推荐 runtime/tool 侧提供 llm-score-file，CLI 只做融合与上传
 ./bin/safespace-rater audit-local \
   --skills-dir ~/.agents/skills \
   --auto \
+  --llm-score-file ./runtime-llm-scores.json \
   --sample-rate 5 \
   --max-report-runes 500 \
   --max-submit 5 \
@@ -59,6 +65,9 @@ make test
 
 # 端到端集成测试（register -> audit-local -> retry-pending -> summary）
 go test ./tests/e2e -run TestAuditFlowEndToEnd -v
+
+# hybrid 联调（LLM enabled + runtime score file 优先）
+go test ./tests/e2e -run 'TestAuditLocalUploadsHybridScoreWhenLLMConfigured|TestAuditLocalPrefersRuntimeScoreFileOverOpenAIFallback' -v
 ```
 
 ## 安全说明

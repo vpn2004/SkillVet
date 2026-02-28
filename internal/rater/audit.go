@@ -23,6 +23,12 @@ type AuditEvidence struct {
 type SkillAudit struct {
 	SkillID       string          `json:"skill_id"`
 	Score         float64         `json:"score"`
+	RuleScore     float64         `json:"rule_score,omitempty"`
+	LLMScore      *float64        `json:"llm_score,omitempty"`
+	ScoreSource   string          `json:"score_source,omitempty"`
+	LLMModel      string          `json:"llm_model,omitempty"`
+	LLMReason     string          `json:"llm_reason,omitempty"`
+	LLMError      string          `json:"llm_error,omitempty"`
 	Strengths     []string        `json:"strengths"`
 	Risks         []string        `json:"risks"`
 	RiskHigh      int             `json:"risk_high"`
@@ -136,6 +142,8 @@ func BuildSkillAudit(skillID, skillDir string, sampleRate int, maxRunes int) (Sk
 	audit := SkillAudit{
 		SkillID:       skillID,
 		Score:         score,
+		RuleScore:     score,
+		ScoreSource:   "rule",
 		Strengths:     strengths,
 		Risks:         risks,
 		RiskHigh:      high,
@@ -164,10 +172,27 @@ func ComposeAuditComment(a SkillAudit, maxRunes int) string {
 		sample = 1
 	}
 
+	source := strings.TrimSpace(a.ScoreSource)
+	if source == "" {
+		source = "rule"
+	}
+	ruleScore := a.RuleScore
+	if ruleScore <= 0 {
+		ruleScore = a.Score
+	}
+	llmScore := "na"
+	if a.LLMScore != nil {
+		llmScore = fmt.Sprintf("%.1f", *a.LLMScore)
+	}
+	model := strings.TrimSpace(a.LLMModel)
+	if model == "" {
+		model = "na"
+	}
+
 	reportOneLine := strings.ReplaceAll(a.Report, "\n", " ")
 	reportOneLine = strings.Join(strings.Fields(reportOneLine), " ")
-	comment := fmt.Sprintf("audit:v1 hash=%s sample=%d score=%.1f risk(h/m/l)=%d/%d/%d files=%d evidence=%d summary=%s",
-		hash, sample, a.Score, a.RiskHigh, a.RiskMedium, a.RiskLow, len(a.ReviewedFiles), len(a.Evidence), reportOneLine)
+	comment := fmt.Sprintf("audit:v2 hash=%s sample=%d source=%s rule=%.1f llm=%s final=%.1f model=%s risk(h/m/l)=%d/%d/%d files=%d evidence=%d summary=%s",
+		hash, sample, source, ruleScore, llmScore, a.Score, model, a.RiskHigh, a.RiskMedium, a.RiskLow, len(a.ReviewedFiles), len(a.Evidence), reportOneLine)
 	return truncateRunes(comment, maxRunes)
 }
 
@@ -295,26 +320,6 @@ func snippetAround(content, token string, radius int) string {
 		end = len(content)
 	}
 	return content[start:end]
-}
-
-func buildAuditNarrative(a SkillAudit) string {
-	skillName := a.SkillID
-	if idx := strings.Index(skillName, "/"); idx >= 0 && idx+1 < len(skillName) {
-		skillName = skillName[idx+1:]
-	}
-	files := strings.Join(a.ReviewedFiles, " + ")
-	if files == "" {
-		files = "SKILL.md"
-	}
-	strength := "暂无"
-	if len(a.Strengths) > 0 {
-		strength = strings.Join(a.Strengths, "；")
-	}
-	risk := "未发现明显风险"
-	if len(a.Risks) > 0 {
-		risk = strings.Join(a.Risks, "；")
-	}
-	return fmt.Sprintf("1) %s 安全审查结果 我审了 %s，结论：优点 - %s。风险点（中等，可控） - %s。证据链：%d 条。建议优先修复高风险点并限制输入边界。最终分：%.1f。", skillName, files, strength, risk, len(a.Evidence), a.Score)
 }
 
 func buildAuditHash(a SkillAudit) string {
