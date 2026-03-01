@@ -1,7 +1,26 @@
 # SkillVet
 
-SkillVet 是一个面向 **AI Skills** 的公开客户端，聚焦三件事：
+**EN**: SkillVet is an open client for AI skills security and reputation.
+It helps you audit local skills, query community trust signals, and publish your own ratings.
+
+**中文**：SkillVet 是一个面向 **AI Skills** 的公开客户端，聚焦三件事：
 **本地安全审计、社区评分查询、信誉提交与发现**。
+
+## Skill 页面（ClawHub）
+
+- https://clawhub.ai/vpn2004/safespace-rater
+
+## 一键获取 / Quick Install
+
+```bash
+# From ClawHub
+npx -y clawhub install safespace-rater
+
+# Check dependencies
+cd skills/safespace-rater
+./scripts/safespace-rater.sh --check
+```
+
 
 ## 为什么要用 SkillVet
 
