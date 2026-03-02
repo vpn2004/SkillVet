@@ -6,7 +6,7 @@ SKILL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT_CANDIDATE="$(cd "${SKILL_DIR}/../.." 2>/dev/null && pwd || true)"
 
 DEFAULT_BIN="${REPO_ROOT_CANDIDATE}/bin/safespace-rater"
-GO_INSTALL_SPEC="${SAFESPACE_RATER_GO_INSTALL:-github.com/vpn2004/agent-safespace/cmd/safespace-rater@latest}"
+GO_INSTALL_SPEC="${SAFESPACE_RATER_GO_INSTALL:-github.com/vpn2004/SkillVet/cmd/safespace-rater@latest}"
 BIN_PATH=""
 
 has_command() {
@@ -114,7 +114,7 @@ if ! try_auto_build; then
 [safespace-rater] cannot locate executable.
 Use one of the following:
 1) Auto-bootstrap with Go (recommended):
-   go install github.com/vpn2004/agent-safespace/cmd/safespace-rater@latest
+   go install github.com/vpn2004/SkillVet/cmd/safespace-rater@latest
 2) Build in repository root:
    make build
 3) Point to an existing binary:
