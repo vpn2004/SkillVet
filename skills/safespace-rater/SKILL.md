@@ -95,6 +95,10 @@ Do NOT use for:
 ${SKILL_DIR:-.}/scripts/safespace-rater.sh --check
 ```
 
+> EN: If binary is missing, the wrapper can auto-bootstrap via `go install` (no manual path setup needed).
+>
+> 中文：若本机缺少二进制，脚本会自动尝试 `go install` 引导安装（无需手动指定路径）。
+
 ### Step 1: Register identity once / 注册一次本地身份
 
 ```bash
