@@ -22,6 +22,21 @@ cd skills/safespace-rater
 ```
 
 
+## 3-point overview / 三点说明
+
+### 1) What is it? / 这是什么？
+- **EN**: SkillVet is a safety-audit and reputation client for AI skills.
+- **中文**：SkillVet 是一个给 AI skills 做安全审计和信誉评分的客户端。
+
+### 2) Why use it? / 有什么价值？
+- **EN**: It turns “looks safe” into a repeatable, measurable workflow.
+- **中文**：它把“看起来安全”变成可复用、可量化、可追溯的流程。
+
+### 3) How to use? / 如何使用？
+- Install from ClawHub
+- Run dependency check
+- Run local audit first (`--dry-run`), then optionally publish ratings
+
 ## 为什么要用 SkillVet
 
 在真实使用场景里，很多技能安装决策仍然靠“看起来靠谱”。
